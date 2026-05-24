@@ -11,12 +11,12 @@ async def send_upgrade_invoice(client: Client, message: Message):
     if not await is_admin(client, message):
         return
 
+    # FIXED: Removed the deprecated provider_token argument for Pyrofork compatibility
     await client.send_invoice(
         chat_id=message.chat.id,
         title="Group Premium Upgrade",
         description="Unlock Captcha and Filters for 30 days.",
         payload=f"premium_upgrade_{message.chat.id}",
-        provider_token="",
         currency="XTR",
         prices=STAR_PRICE,
         start_parameter="premium_upgrade"
