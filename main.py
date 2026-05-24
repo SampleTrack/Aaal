@@ -1,6 +1,12 @@
 import os
 import asyncio
 import logging
+
+# FIX: We must explicitly create and set the event loop BEFORE importing Pyrogram.
+# If we do not do this, modern Python environments will crash on Pyrogram's initialization.
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 from pyrogram import Client, idle
 from aiohttp import web
 from config import Config
@@ -35,4 +41,5 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
+    # We now fetch the loop we created at the top of the file
     asyncio.get_event_loop().run_until_complete(main())
