@@ -2,16 +2,24 @@ import os
 import asyncio
 import logging
 
-# FIX: We must explicitly create and set the event loop BEFORE importing Pyrogram.
-# If we do not do this, modern Python environments will crash on Pyrogram's initialization.
+# FIX: Explicitly create and set the event loop BEFORE importing Pyrogram.
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 from pyrogram import Client, idle
 from aiohttp import web
 from config import Config
+from database.db import db
 
 logging.basicConfig(level=logging.INFO)
+
+# FIX: Fail fast if OWNER_ID was never set — avoids silently opening owner commands
+# to user ID 0 (Telegram service accounts).
+if Config.OWNER_ID == 0:
+    raise RuntimeError(
+        "OWNER_ID environment variable is not set. "
+        "Add your Telegram user ID to .env or Render's environment variables and redeploy."
+    )
 
 app = Client(
     "group_manager",
@@ -35,11 +43,15 @@ async def start_web_server():
 
 async def main():
     await start_web_server()
+
+    # SUGGESTION: Create MongoDB indexes once at startup so all queries are fast
+    await db.ensure_indexes()
+    logging.info("MongoDB indexes verified.")
+
     await app.start()
     logging.info("Pyrogram Bot started successfully.")
     await idle()
     await app.stop()
 
 if __name__ == "__main__":
-    # We now fetch the loop we created at the top of the file
-    asyncio.get_event_loop().run_until_complete(main())
+    loop.run_until_complete(main())
