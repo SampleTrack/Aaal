@@ -1,116 +1,99 @@
-import asyncio
+import asyncio, os
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from database.db import db
 from config import Config
+from utils.log_channel import send_log
+from utils.error_logger import log_command
 
-# --- 1. THE SECURITY GATEKEEPER ---
-# This custom filter ensures ONLY the ID listed in Config.OWNER_ID can run these commands.
-def is_owner(_, __, message: Message):
-    return bool(message.from_user and message.from_user.id == Config.OWNER_ID)
+def is_owner(_, __, m: Message):
+    return bool(m.from_user and m.from_user.id == Config.OWNER_ID)
 
 owner_filter = filters.create(is_owner)
 
-
-# --- 2. THE STATS COMMAND ---
 @Client.on_message(filters.command("stats") & owner_filter)
+@log_command
 async def bot_stats(client: Client, message: Message):
-    """
-    Pulls real-time analytics from MongoDB.
-    """
-    processing_msg = await message.reply("📊 Fetching live statistics from database...")
-    
+    msg = await message.reply("📊 Fetching stats...")
     try:
-        # Count documents directly from our MongoDB collections
-        total_groups = await db.chats.count_documents({})
-        premium_groups = await db.chats.count_documents({"is_premium": True})
-        total_warns = await db.warnings.count_documents({})
-        
-        stats_text = (
-            "**📈 Group Manager Dashboard**\n\n"
-            f"**Total Groups:** {total_groups}\n"
-            f"**Premium Subscriptions:** {premium_groups}\n"
-            f"**Total Warnings Issued:** {total_warns}\n\n"
-            "Systems are running nominally. 🟢"
+        total   = await db.chats.count_documents({})
+        premium = await db.chats.count_documents({"is_premium": True})
+        warns   = await db.warnings.count_documents({})
+        await msg.edit_text(
+            f"**📈 Dashboard**\n\n"
+            f"**Total Groups:** {total}\n"
+            f"**Premium:** {premium}\n"
+            f"**Total Warns:** {warns}\n\n"
+            f"Systems nominal. 🟢"
         )
-        await processing_msg.edit_text(stats_text)
     except Exception as e:
-        await processing_msg.edit_text(f"❌ Error fetching stats: {e}")
+        await msg.edit_text(f"❌ Error: {e}")
 
+@Client.on_message(filters.command("logs") & owner_filter)
+@log_command
+async def get_logs(client: Client, message: Message):
+    """Send the two log files as documents."""
+    files = {"logs/bot_errors.log": "🔴 Error Log", "logs/commands.log": "📋 Commands Log"}
+    sent = False
+    for path, label in files.items():
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            await client.send_document(
+                message.chat.id, path,
+                caption=label, reply_to_message_id=message.id,
+            )
+            sent = True
+    if not sent:
+        await message.reply("📭 Log files are empty or not created yet.")
 
-# --- 3. THE FORCE UPGRADE COMMAND ---
+@Client.on_message(filters.command("clearlogs") & owner_filter)
+@log_command
+async def clear_logs(client: Client, message: Message):
+    """Wipe both log files."""
+    for path in ("logs/bot_errors.log", "logs/commands.log"):
+        if os.path.exists(path):
+            open(path, "w").close()
+    await message.reply("🗑️ Log files cleared.")
+
 @Client.on_message(filters.command("forceupgrade") & owner_filter)
+@log_command
 async def force_upgrade(client: Client, message: Message):
-    """
-    Usage: /forceupgrade <chat_id> <days>
-    Manually bypasses the payment gateway and assigns premium status.
-    """
-    # Check if the owner provided the right arguments
     args = message.text.split()
     if len(args) != 3:
-        await message.reply("⚠️ **Syntax Error:** Use `/forceupgrade -100123456789 30`")
-        return
-        
+        return await message.reply("⚠️ Usage: `/forceupgrade -100123456789 30`")
     try:
-        target_chat_id = int(args[1])
-        days = int(args[2])
-        
-        # We reuse the exact same database function the payment gateway uses!
+        target_chat_id, days = int(args[1]), int(args[2])
         await db.add_premium_time(target_chat_id, days)
-        await message.reply(f"✅ **Success!** Group `{target_chat_id}` has been granted {days} days of Premium.")
-        
-        # Notify the target group if the bot is still inside it
+        await message.reply(f"✅ Group `{target_chat_id}` granted {days} days of Premium.")
+        await send_log(
+            client,
+            f"🌟 **Premium Granted (Manual)**\n"
+            f"**Group:** `{target_chat_id}`\n**Days:** {days}\n"
+            f"**By:** {message.from_user.mention}",
+        )
         try:
             await client.send_message(
-                target_chat_id, 
-                f"🎉 **Good news!** The developer has manually granted this group **{days} days** of Premium features!"
+                target_chat_id,
+                f"🎉 The developer has granted this group **{days} days** of Premium!",
             )
         except Exception:
-            # Fails silently if the bot was kicked from that group
             pass
-            
     except ValueError:
-        await message.reply("❌ **Error:** Chat ID and Days must be valid numbers.")
+        await message.reply("❌ Chat ID and Days must be numbers.")
 
-
-# --- 4. THE BROADCAST COMMAND ---
 @Client.on_message(filters.command("broadcast") & owner_filter)
+@log_command
 async def broadcast_message(client: Client, message: Message):
-    """
-    Usage: /broadcast <your message>
-    Sends a message to every single group registered in the database.
-    """
-    # Ensure there is a message to send
     if len(message.command) < 2 and not message.reply_to_message:
-        await message.reply("⚠️ **Syntax Error:** Use `/broadcast Hello everyone!` or reply to a message with `/broadcast`.")
-        return
-
-    # Extract the broadcast text
-    broadcast_text = message.text.split(None, 1)[1] if len(message.command) > 1 else message.reply_to_message.text
-    
-    processing_msg = await message.reply("📡 Starting broadcast... this may take a while depending on group count.")
-    
-    success_count = 0
-    failed_count = 0
-    
-    # Fetch all chats from the database cursor
-    cursor = db.chats.find({})
-    chats = await cursor.to_list(length=None)
-    
-    for chat in chats:
+        return await message.reply("⚠️ Usage: `/broadcast Hello!` or reply to a message.")
+    text = (message.text.split(None, 1)[1] if len(message.command) > 1
+            else message.reply_to_message.text)
+    msg = await message.reply("📡 Broadcasting...")
+    ok = fail = 0
+    async for chat in db.chats.find({}):
         try:
-            await client.send_message(chat["chat_id"], f"📢 **Developer Broadcast:**\n\n{broadcast_text}")
-            success_count += 1
-            
-            # CRITICAL: We must sleep to avoid Telegram's strict flood limits (max 30 msgs/second)
-            await asyncio.sleep(0.1) 
+            await client.send_message(chat["chat_id"], f"📢 **Broadcast:**\n\n{text}")
+            ok += 1
+            await asyncio.sleep(0.1)
         except Exception:
-            # Group might have kicked the bot, or chat ID changed
-            failed_count += 1
-            
-    await processing_msg.edit_text(
-        f"✅ **Broadcast Complete!**\n\n"
-        f"**Successfully Sent:** {success_count} groups\n"
-        f"**Failed (Bot Kicked):** {failed_count} groups"
-    )
-
+            fail += 1
+    await msg.edit_text(f"✅ Done!\n**Sent:** {ok}\n**Failed:** {fail}")
