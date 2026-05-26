@@ -10,5 +10,5 @@ class Config:
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     PORT = int(os.getenv("PORT", "8080"))
     PREMIUM_PRICE_STARS = int(os.getenv("PREMIUM_PRICE_STARS", "250"))
-    # Add your personal Telegram User ID here:
-    OWNER_ID = int(os.getenv("OWNER_ID", "0")) 
+    OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+    LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "0"))  # Your personal log channel ID
